@@ -1,6 +1,7 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+#include <chrono>
 #include <array>
 
 #include <sys/socket.h>
@@ -115,9 +116,25 @@ void start_netflow_collector(std::size_t thread_id, const std::string& netflow_h
     freeaddrinfo(servinfo);
 }
 
+void print_speed(uint32_t number_of_thread) {
+    std::array<uint64_t, 512> packets_per_thread_previous = packets_per_thread;
+
+    std::cout <<"Thread ID" << "\t" << "UDP packet / second" << std::endl; 
+
+    while (true) {
+	std::this_thread::sleep_for(std::chrono::seconds(1));
+
+	for (uint32_t i = 0; i < number_of_thread; i++) {
+            std::cout << "Thread " << i << "\t" << packets_per_thread[i] - packets_per_thread_previous[i] << std::endl;
+	}
+
+	packets_per_thread_previous = packets_per_thread;
+    }
+}
+
 int main() {
     std::string host =  "0.0.0.0";
-    uint32_t port = 2056;
+    uint32_t port = 2055;
 
     uint32_t number_of_threads = 2;
 
@@ -127,6 +144,12 @@ int main() {
         std::thread current_thread(start_netflow_collector, thread_id, host, port, number_of_threads);
         thread_group.push_back(std::move(current_thread));
     }
+
+    // Add some delay to be sure that both threads started
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    // Start speed printer
+    std::thread speed_printer(print_speed, number_of_threads);
 
     for (auto& thread: thread_group) {
         thread.join();
