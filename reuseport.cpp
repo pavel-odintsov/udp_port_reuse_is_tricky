@@ -49,14 +49,25 @@ void start_netflow_collector(std::size_t thread_id, const std::string& netflow_h
         return;
     }
 
+    bool set_reuse_addr_flag = false;
+
+    if (set_reuse_addr_flag) {
+        auto set_reuse_addr_res = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse_port_optval, sizeof(reuse_port_optval));
+
+	if (set_reuse_addr_res != 0) {
+	    std::cout << "Cannot enable reuse port mode"<< std::endl;
+	    return;
+	}
+    }
+
     // We may have custom reuse port load balancing algorithm 
     if (true) {
         std::cout << "Loading BPF to implement random UDP traffic distribution over available threads" << std::endl;
 
         struct sock_filter bpf_random_load_distribution[3] = {
-            /* A = (uint32_t)skb[0] */
-            { BPF_LD  | BPF_W | BPF_ABS, 0, 0, 0 },
-            /* A = A % mod */
+            /* Load random to A */
+            { BPF_LD  | BPF_W | BPF_ABS,  0,  0, 0xfffff038 },
+	    /* A = A % mod */
             { BPF_ALU | BPF_MOD, 0, 0, netflow_threads_per_port },
             /* return A */
             { BPF_RET | BPF_A, 0, 0, 0 },
