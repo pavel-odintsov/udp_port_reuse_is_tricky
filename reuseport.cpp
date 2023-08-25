@@ -49,7 +49,7 @@ void start_netflow_collector(std::size_t thread_id, const std::string& netflow_h
         return;
     }
 
-    bool set_reuse_addr_flag = false;
+    bool set_reuse_addr_flag = true;
 
     if (set_reuse_addr_flag) {
         auto set_reuse_addr_res = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse_port_optval, sizeof(reuse_port_optval));
@@ -72,6 +72,9 @@ void start_netflow_collector(std::size_t thread_id, const std::string& netflow_h
             /* return A */
             { BPF_RET | BPF_A, 0, 0, 0 },
         };
+
+	// There is an alternative way to pass number of therads
+	bpf_random_load_distribution[1].k = uint32_t(netflow_threads_per_port);
 
         struct sock_fprog bpf_programm;
 
