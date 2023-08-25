@@ -1,12 +1,16 @@
 #include <iostream>
 #include <thread>
+#include <vector>
+#include <array>
 
 #include <sys/socket.h>
 #include <string.h>
 #include <netdb.h>
 #include <linux/filter.h>
 
-void start_netflow_collector(const std::string& netflow_host, unsigned int netflow_port, uint32_t netflow_threads_per_port) {
+std::array<uint64_t, 512> packets_per_thread;
+
+void start_netflow_collector(std::size_t thread_id, const std::string& netflow_host, unsigned int netflow_port, uint32_t netflow_threads_per_port) {
     std::cout << "Netflow plugin will listen on " << netflow_host << ":" << netflow_port << " udp port" << std::endl;
 
     struct addrinfo hints;
@@ -87,8 +91,24 @@ void start_netflow_collector(const std::string& netflow_host, unsigned int netfl
 
     std::cout << "Started capture" << std::endl;
 
-    while(true) {
-        // Emulate traffic processing
+    while (true) {
+        const unsigned int udp_buffer_size = 65536;
+        char udp_buffer[udp_buffer_size];
+
+        // This approach provide ability to store both IPv4 and IPv6 client's
+        // addresses
+        struct sockaddr_storage client_address;
+        
+        memset(&client_address, 0, sizeof(struct sockaddr_storage));
+        socklen_t address_len = sizeof(struct sockaddr_storage);
+
+        int received_bytes = recvfrom(sockfd, udp_buffer, udp_buffer_size, 0, (struct sockaddr*)&client_address, &address_len);
+
+        // logger << log4cpp::Priority::ERROR << "Received " << received_bytes << " with netflow UDP server";
+
+        if (received_bytes > 0) {
+            packets_per_thread[thread_id]++;
+        }
     }
 
     std::cout << "Netflow processing thread for " << netflow_host << ":" << netflow_port << " was finished";
@@ -101,11 +121,14 @@ int main() {
 
     uint32_t number_of_threads = 2;
 
-    // Launch two thread to distribute load
-    std::thread my_thread_1(start_netflow_collector, host, port, number_of_threads);
+    std::vector<std::thread> thread_group;
 
-    std::thread my_thread_2(start_netflow_collector, host, port, number_of_threads);
-    
-    my_thread_1.join();
-    my_thread_2.join();
+    for (size_t thread_id = 0; thread_id < number_of_threads; thread_id++) {
+        std::thread current_thread(start_netflow_collector, thread_id, host, port, number_of_threads);
+        thread_group.push_back(std::move(current_thread));
+    }
+
+    for (auto& thread: thread_group) {
+        thread.join();
+    }
 }
