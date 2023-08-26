@@ -11,6 +11,15 @@
 
 std::array<uint64_t, 512> packets_per_thread;
 
+// Set reuse_addr flag for socket as workaround for inability to add sockets into reuse_port group after we assign BPF for it
+bool set_reuse_addr_flag = false;
+
+// In this case we will follow documented behaviour which sadly does not work without reuse_addr
+bool assign_bpf_for_each_socket_in_reuse_port_group = false;
+
+// In this case we assign BPF after we create reuse port group and did bind
+bool assign_bpf_after_reuse_port_group_creation = true;
+
 // Loads BPF for socket
 bool load_bpf(int sockfd, uint32_t netflow_threads_per_port) {
     std::cout << "Loading BPF to implement random UDP traffic distribution over available threads" << std::endl;
@@ -84,8 +93,6 @@ bool create_and_bind_socket(std::size_t thread_id, const std::string& netflow_ho
         return false;
     }
 
-    bool set_reuse_addr_flag = true;
-
     if (set_reuse_addr_flag) {
         auto set_reuse_addr_res = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse_port_optval, sizeof(reuse_port_optval));
 
@@ -96,7 +103,7 @@ bool create_and_bind_socket(std::size_t thread_id, const std::string& netflow_ho
     }
 
     // We may have custom reuse port load balancing algorithm 
-    if (true) {
+    if (assign_bpf_for_each_socket_in_reuse_port_group) {
         bool bpf_result = load_bpf(sockfd, netflow_threads_per_port);
     
         if (!bpf_result) {
@@ -195,6 +202,15 @@ int main() {
 
     std::cout << "Starting packet capture" << std::endl;
     for (const auto& worker_data: workers) {
+        if (assign_bpf_after_reuse_port_group_creation) {
+            bool bpf_result = load_bpf(worker_data.socket_fd, number_of_threads);
+
+            if (!bpf_result) {
+                std::cout << "Cannot load BPF" << std::endl;
+                exit(1);
+            }
+        }
+            
         std::thread current_thread(capture_traffic_from_socket, worker_data.socket_fd, worker_data.thread_id);
         thread_group.push_back(std::move(current_thread));
     }
