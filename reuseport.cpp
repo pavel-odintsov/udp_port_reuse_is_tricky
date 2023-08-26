@@ -11,6 +11,41 @@
 
 std::array<uint64_t, 512> packets_per_thread;
 
+// Loads BPF for socket
+bool load_bpf(int sockfd, uint32_t netflow_threads_per_port) {
+    std::cout << "Loading BPF to implement random UDP traffic distribution over available threads" << std::endl;
+
+    struct sock_filter bpf_random_load_distribution[3] = {
+        /* Load random to A */
+        { BPF_LD  | BPF_W | BPF_ABS,  0,  0, 0xfffff038 },
+        /* A = A % mod */
+        { BPF_ALU | BPF_MOD, 0, 0, netflow_threads_per_port },
+        /* return A */
+        { BPF_RET | BPF_A, 0, 0, 0 },
+    };
+
+    // There is an alternative way to pass number of therads
+    bpf_random_load_distribution[1].k = uint32_t(netflow_threads_per_port);
+
+    struct sock_fprog bpf_programm;
+
+    bpf_programm.len    = 3;
+    bpf_programm.filter = bpf_random_load_distribution;
+
+    // UDP support for this feature is available since Linux 4.5
+    int attach_filter_result = setsockopt(sockfd, SOL_SOCKET, SO_ATTACH_REUSEPORT_CBPF, &bpf_programm, sizeof(bpf_programm));
+
+    if (attach_filter_result != 0) {
+        std::cout << "Can't attach reuse port BPF filter " << " errno: " << errno << " error: " << strerror(errno) << std::endl;
+        return false;
+    } 
+
+    std::cout << "Successfully loaded reuse port BPF"<< std::endl;
+    
+    return true;
+}
+
+
 bool create_and_bind_socket(std::size_t thread_id, const std::string& netflow_host, unsigned int netflow_port, uint32_t netflow_threads_per_port, int& sockfd) {
     std::cout << "Netflow plugin will listen on " << netflow_host << ":" << netflow_port << " udp port" << std::endl;
 
@@ -62,34 +97,10 @@ bool create_and_bind_socket(std::size_t thread_id, const std::string& netflow_ho
 
     // We may have custom reuse port load balancing algorithm 
     if (true) {
-        std::cout << "Loading BPF to implement random UDP traffic distribution over available threads" << std::endl;
-
-        struct sock_filter bpf_random_load_distribution[3] = {
-            /* Load random to A */
-            { BPF_LD  | BPF_W | BPF_ABS,  0,  0, 0xfffff038 },
-	    /* A = A % mod */
-            { BPF_ALU | BPF_MOD, 0, 0, netflow_threads_per_port },
-            /* return A */
-            { BPF_RET | BPF_A, 0, 0, 0 },
-        };
-
-	// There is an alternative way to pass number of therads
-	bpf_random_load_distribution[1].k = uint32_t(netflow_threads_per_port);
-
-        struct sock_fprog bpf_programm;
-
-        bpf_programm.len    = 3;
-        bpf_programm.filter = bpf_random_load_distribution;
-
-        // UDP support for this feature is available since Linux 4.5
-        int attach_filter_result = setsockopt(sockfd, SOL_SOCKET, SO_ATTACH_REUSEPORT_CBPF, &bpf_programm, sizeof(bpf_programm));
-
-        if (attach_filter_result != 0) {
-            std::cout << "Can't attach reuse port BPF filter for port " << port_as_string
-                   << " errno: " << errno << " error: " << strerror(errno) << std::endl;
-            // It's not critical issue. We will use default distribution logic
-        } else { 
-            std::cout << "Successfully loaded reuse port BPF"<< std::endl;
+        bool bpf_result = load_bpf(sockfd, netflow_threads_per_port);
+    
+        if (!bpf_result) {
+            std::cout << "Cannot load BPF" << std::endl;
         }
     }
 
