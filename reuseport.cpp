@@ -21,20 +21,20 @@ bool assign_bpf_for_each_socket_in_reuse_port_group = false;
 bool assign_bpf_after_reuse_port_group_creation = true;
 
 // Loads BPF for socket
-bool load_bpf(int sockfd, uint32_t netflow_threads_per_port) {
+bool load_bpf(int sockfd, uint32_t threads_per_port) {
     std::cout << "Loading BPF to implement random UDP traffic distribution over available threads" << std::endl;
 
     struct sock_filter bpf_random_load_distribution[3] = {
         /* Load random to A */
         { BPF_LD  | BPF_W | BPF_ABS,  0,  0, 0xfffff038 },
         /* A = A % mod */
-        { BPF_ALU | BPF_MOD, 0, 0, netflow_threads_per_port },
+        { BPF_ALU | BPF_MOD, 0, 0, threads_per_port },
         /* return A */
         { BPF_RET | BPF_A, 0, 0, 0 },
     };
 
     // There is an alternative way to pass number of therads
-    bpf_random_load_distribution[1].k = uint32_t(netflow_threads_per_port);
+    bpf_random_load_distribution[1].k = uint32_t(threads_per_port);
 
     struct sock_fprog bpf_programm;
 
@@ -55,8 +55,8 @@ bool load_bpf(int sockfd, uint32_t netflow_threads_per_port) {
 }
 
 
-bool create_and_bind_socket(std::size_t thread_id, const std::string& netflow_host, unsigned int netflow_port, uint32_t netflow_threads_per_port, int& sockfd) {
-    std::cout << "Netflow plugin will listen on " << netflow_host << ":" << netflow_port << " udp port" << std::endl;
+bool create_and_bind_socket(std::size_t thread_id, const std::string& host, unsigned int port, uint32_t threads_per_port, int& sockfd) {
+    std::cout << "Netflow plugin will listen on " << host << ":" << port << " udp port" << std::endl;
 
     struct addrinfo hints;
     memset(&hints, 0, sizeof hints);
@@ -64,19 +64,19 @@ bool create_and_bind_socket(std::size_t thread_id, const std::string& netflow_ho
     hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
     
-    // AI_PASSIVE to handle empty netflow_host as bind on all interfaces
+    // AI_PASSIVE to handle empty host as bind on all interfaces
     // AI_NUMERICHOST to allow only numerical host
     hints.ai_flags = AI_PASSIVE | AI_NUMERICHOST;
 
     addrinfo* servinfo = NULL;
 
-    std::string port_as_string = std::to_string(netflow_port);
+    std::string port_as_string = std::to_string(port);
 
-    int getaddrinfo_result = getaddrinfo(netflow_host.c_str(), port_as_string.c_str(), &hints, &servinfo);
+    int getaddrinfo_result = getaddrinfo(host.c_str(), port_as_string.c_str(), &hints, &servinfo);
 
     if (getaddrinfo_result != 0) {
-        std::cout << "Netflow getaddrinfo function failed with code: " << getaddrinfo_result
-               << " please check netflow_host syntax" << std::endl;
+        std::cout << "getaddrinfo function failed with code: " << getaddrinfo_result
+               << " please check host syntax" << std::endl;
         return false;
     }
 
@@ -104,7 +104,7 @@ bool create_and_bind_socket(std::size_t thread_id, const std::string& netflow_ho
 
     // We may have custom reuse port load balancing algorithm 
     if (assign_bpf_for_each_socket_in_reuse_port_group) {
-        bool bpf_result = load_bpf(sockfd, netflow_threads_per_port);
+        bool bpf_result = load_bpf(sockfd, threads_per_port);
     
         if (!bpf_result) {
             std::cout << "Cannot load BPF" << std::endl;
@@ -114,7 +114,7 @@ bool create_and_bind_socket(std::size_t thread_id, const std::string& netflow_ho
     int bind_result = bind(sockfd, servinfo->ai_addr, servinfo->ai_addrlen);
 
     if (bind_result) {
-        std::cout << "Can't bind on port: " << netflow_port << " on host " << netflow_host
+        std::cout << "Can't bind on port: " << port << " on host " << host
                << " errno:" << errno << " error: " << strerror(errno) << std::endl;
 
         return false;;
@@ -135,16 +135,9 @@ void capture_traffic_from_socket(int sockfd, std::size_t thread_id) {
         const unsigned int udp_buffer_size = 65536;
         char udp_buffer[udp_buffer_size];
 
-        // This approach provide ability to store both IPv4 and IPv6 client's
-        // addresses
-        struct sockaddr_storage client_address;
-        
-        memset(&client_address, 0, sizeof(struct sockaddr_storage));
-        socklen_t address_len = sizeof(struct sockaddr_storage);
+        int received_bytes = recv(sockfd, udp_buffer, udp_buffer_size, 0);
 
-        int received_bytes = recvfrom(sockfd, udp_buffer, udp_buffer_size, 0, (struct sockaddr*)&client_address, &address_len);
-
-        // logger << log4cpp::Priority::ERROR << "Received " << received_bytes << " with netflow UDP server";
+        // logger << log4cpp::Priority::ERROR << "Received " << received_bytes << " with UDP server";
 
         if (received_bytes > 0) {
             packets_per_thread[thread_id]++;
@@ -169,7 +162,7 @@ void print_speed(uint32_t number_of_thread) {
 }
 
 int main() {
-    std::string host =  "0.0.0.0";
+    std::string host = "::";
     uint32_t port = 2055;
 
     uint32_t number_of_threads = 2;
