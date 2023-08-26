@@ -11,7 +11,7 @@
 
 std::array<uint64_t, 512> packets_per_thread;
 
-void start_netflow_collector(std::size_t thread_id, const std::string& netflow_host, unsigned int netflow_port, uint32_t netflow_threads_per_port) {
+bool create_and_bind_socket(std::size_t thread_id, const std::string& netflow_host, unsigned int netflow_port, uint32_t netflow_threads_per_port, int& sockfd) {
     std::cout << "Netflow plugin will listen on " << netflow_host << ":" << netflow_port << " udp port" << std::endl;
 
     struct addrinfo hints;
@@ -33,10 +33,10 @@ void start_netflow_collector(std::size_t thread_id, const std::string& netflow_h
     if (getaddrinfo_result != 0) {
         std::cout << "Netflow getaddrinfo function failed with code: " << getaddrinfo_result
                << " please check netflow_host syntax" << std::endl;
-        return;
+        return false;
     }
 
-    int sockfd = socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol);
+    sockfd = socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol);
 
     std::cout << "Setting reuse port" << std::endl;
 
@@ -46,7 +46,7 @@ void start_netflow_collector(std::size_t thread_id, const std::string& netflow_h
 
     if (set_reuse_port_res != 0) {
         std::cout << "Cannot enable reuse port mode"<< std::endl;
-        return;
+        return false;
     }
 
     bool set_reuse_addr_flag = true;
@@ -54,10 +54,10 @@ void start_netflow_collector(std::size_t thread_id, const std::string& netflow_h
     if (set_reuse_addr_flag) {
         auto set_reuse_addr_res = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse_port_optval, sizeof(reuse_port_optval));
 
-	if (set_reuse_addr_res != 0) {
-	    std::cout << "Cannot enable reuse port mode"<< std::endl;
-	    return;
-	}
+	    if (set_reuse_addr_res != 0) {
+	        std::cout << "Cannot enable reuse port mode"<< std::endl;
+	        return false;
+	    }
     }
 
     // We may have custom reuse port load balancing algorithm 
@@ -99,11 +99,17 @@ void start_netflow_collector(std::size_t thread_id, const std::string& netflow_h
         std::cout << "Can't bind on port: " << netflow_port << " on host " << netflow_host
                << " errno:" << errno << " error: " << strerror(errno) << std::endl;
 
-        return;
-    } else {
-        std::cout << "Successful bind" << std::endl;
+        return false;;
     }
 
+    std::cout << "Successful bind" << std::endl;
+
+    // TODO: freeaddrinfo(servinfo);
+
+    return true;
+}
+
+void capture_traffic_from_socket(int sockfd, std::size_t thread_id) {
     std::cout << "Started capture" << std::endl;
 
     while (true) {
@@ -125,9 +131,6 @@ void start_netflow_collector(std::size_t thread_id, const std::string& netflow_h
             packets_per_thread[thread_id]++;
         }
     }
-
-    std::cout << "Netflow processing thread for " << netflow_host << ":" << netflow_port << " was finished";
-    freeaddrinfo(servinfo);
 }
 
 void print_speed(uint32_t number_of_thread) {
@@ -136,13 +139,13 @@ void print_speed(uint32_t number_of_thread) {
     std::cout <<"Thread ID" << "\t" << "UDP packet / second" << std::endl; 
 
     while (true) {
-	std::this_thread::sleep_for(std::chrono::seconds(1));
+	    std::this_thread::sleep_for(std::chrono::seconds(1));
 
-	for (uint32_t i = 0; i < number_of_thread; i++) {
+	    for (uint32_t i = 0; i < number_of_thread; i++) {
             std::cout << "Thread " << i << "\t" << packets_per_thread[i] - packets_per_thread_previous[i] << std::endl;
-	}
+	    }
 
-	packets_per_thread_previous = packets_per_thread;
+	    packets_per_thread_previous = packets_per_thread;
     }
 }
 
@@ -152,10 +155,36 @@ int main() {
 
     uint32_t number_of_threads = 2;
 
+    class worker_data_t {
+        public:
+            int socket_fd = 0;
+            size_t thread_id = 0;
+    };
+
+    std::vector<worker_data_t> workers;;
+
     std::vector<std::thread> thread_group;
 
     for (size_t thread_id = 0; thread_id < number_of_threads; thread_id++) {
-        std::thread current_thread(start_netflow_collector, thread_id, host, port, number_of_threads);
+        int socket_fd = 0;
+
+        bool result = create_and_bind_socket(thread_id, host, port, number_of_threads, socket_fd);
+
+        if (!result) {
+            std::cout << "Cannot create / bind socket" << std::endl;
+            exit(1);
+        }
+
+        worker_data_t worker_data;
+        worker_data.socket_fd = socket_fd;
+        worker_data.thread_id = thread_id;
+
+        workers.push_back(worker_data);
+    }
+
+    std::cout << "Starting packet capture" << std::endl;
+    for (const auto& worker_data: workers) {
+        std::thread current_thread(capture_traffic_from_socket, worker_data.socket_fd, worker_data.thread_id);
         thread_group.push_back(std::move(current_thread));
     }
 
