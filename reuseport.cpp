@@ -122,7 +122,8 @@ bool create_and_bind_socket(std::size_t thread_id, const std::string& netflow_ho
 
     std::cout << "Successful bind" << std::endl;
 
-    // TODO: freeaddrinfo(servinfo);
+    // Free up memory for server information structure
+    freeaddrinfo(servinfo);
 
     return true;
 }
